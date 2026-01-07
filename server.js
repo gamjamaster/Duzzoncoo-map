@@ -12,6 +12,18 @@ app.use(express.static('public'));
 const NAVER_CLIENT_ID = process.env.NAVER_CLIENT_ID;
 const NAVER_CLIENT_SECRET = process.env.NAVER_CLIENT_SECRET;
 
+function assertNaverCredentials() {
+    if (!NAVER_CLIENT_ID || !NAVER_CLIENT_SECRET) {
+        const missing = [
+            !NAVER_CLIENT_ID ? 'NAVER_CLIENT_ID' : null,
+            !NAVER_CLIENT_SECRET ? 'NAVER_CLIENT_SECRET' : null
+        ].filter(Boolean);
+        throw new Error(
+            `Missing Naver API credentials: ${missing.join(', ')}. Add them to your .env file.`
+        );
+    }
+}
+
 // 브라우저 인스턴스 (재사용)
 let browser = null;
 
@@ -100,7 +112,9 @@ function hasKeywordInDetails(details, keywords) {
 // 1단계: 키워드로 직접 검색
 async function searchByKeyword(keyword) {
     try {
-        const response = await axios.get('https://openapi.naver.com/v1/search/local. json', {
+        assertNaverCredentials();
+
+        const response = await axios.get('https://openapi.naver.com/v1/search/local.json', {
             params: {
                 query: keyword,
                 display: 50,
@@ -115,9 +129,51 @@ async function searchByKeyword(keyword) {
         
         return response.data.items || [];
     } catch (error) {
-        console.error('키워드 검색 오류:', error. message);
+        const status = error.response?.status;
+        const details = error.response?.data;
+        console.error('키워드 검색 오류:', status ? `${status}` : '', details || error.message);
         return [];
     }
+}
+
+// 다양한 키워드로 검색 (네이버 AI 검색 활용)
+async function searchByMultipleKeywords(baseKeyword) {
+    // 두바이쫀득쿠키 관련 다양한 검색어
+    const keywords = [
+        baseKeyword,
+        '두바이쫀득쿠키',
+        '두바이 쫀득쿠키',
+        '두바이쿠키',
+        '두쫀쿠',
+        '두바이 초콜릿 쿠키'
+    ];
+    
+    // 중복 제거
+    const uniqueKeywords = [...new Set(keywords)];
+    const allStores = [];
+    
+    for (const kw of uniqueKeywords) {
+        console.log(`   🔍 "${kw}" 검색 중...`);
+        const results = await searchByKeyword(kw);
+        allStores.push(...results);
+        
+        // API 부하 방지
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    // 중복 제거 (매장명 + 주소로 판별)
+    const uniqueMap = new Map();
+    allStores.forEach(store => {
+        const key = removeHtmlTags(store.title) + store.address;
+        if (!uniqueMap.has(key)) {
+            uniqueMap.set(key, store);
+        }
+    });
+    
+    const uniqueStores = Array.from(uniqueMap.values());
+    console.log(`   ✅ 총 ${uniqueStores.length}개 매장 발견 (다양한 키워드)`);
+    
+    return uniqueStores;
 }
 
 // 2단계: 위치 기반 주변 카페/디저트 검색
@@ -134,6 +190,8 @@ async function searchNearbyStores(lat, lng, radius = 5) {
     
     for (const category of categories) {
         try {
+            assertNaverCredentials();
+
             const response = await axios.get('https://openapi.naver.com/v1/search/local.json', {
                 params: {
                     query:  category,
@@ -284,11 +342,11 @@ app.get('/api/search-stores', async (req, res) => {
         let stores = [];
         
         if (useLocation) {
-            console.log('🎯 전략: 위치 기반 + 필터링');
+            console.log('🎯 전략: 위치 기반 + 다양한 키워드 검색');
             
-            // 1단계: 키워드 직접 검색
-            console.log('1️⃣ 키워드 직접 검색...');
-            const keywordResults = await searchByKeyword(keyword);
+            // 1단계: 다양한 키워드로 검색 (네이버 API의 AI 검색 활용)
+            console.log('1️⃣ 다양한 키워드로 검색...');
+            const keywordResults = await searchByMultipleKeywords(keyword);
             console.log(`   → ${keywordResults.length}개 발견`);
             
             // 2단계: 주변 카페/디저트 검색
@@ -296,12 +354,12 @@ app.get('/api/search-stores', async (req, res) => {
             const nearbyStores = await searchNearbyStores(lat, lng);
             console.log(`   → ${nearbyStores.length}개 발견`);
             
-            // 3단계: 기본 정보 필터링
+            // 3단계: 기본 정보 필터링 (느슨하게)
             console.log('3️⃣ 기본 정보 필터링...');
             const filteredStores = filterByBasicInfo(nearbyStores, keyword);
             console.log(`   → ${filteredStores.length}개 발견`);
             
-            // 결과 합치기
+            // 결과 합치기 (키워드 검색 결과를 우선)
             const combined = [...keywordResults, ...filteredStores];
             const uniqueMap = new Map();
             combined.forEach(store => {
@@ -321,8 +379,8 @@ app.get('/api/search-stores', async (req, res) => {
             console.log(`✅ 최종 결과: ${stores.length}개 매장`);
             
         } else {
-            console. log('🎯 전략: 키워드 검색만');
-            stores = await searchByKeyword(keyword);
+            console.log('🎯 전략: 다양한 키워드로 검색 (네이버 AI 활용)');
+            stores = await searchByMultipleKeywords(keyword);
             console.log(`✅ 결과: ${stores.length}개 매장`);
         }
         

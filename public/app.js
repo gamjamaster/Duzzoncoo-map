@@ -211,6 +211,12 @@ async function performSearch(keyword) {
         if (userLocation) {
             url += `&lat=${userLocation.lat}&lng=${userLocation.lng}`;
         }
+
+        // 상세 검색 옵션 추가
+        const detailedSearch = document.getElementById('detailedSearch')?.checked;
+        if (detailedSearch) {
+            url += `&detailed=true`;
+        }
         
         const response = await fetch(url);
         const data = await response.json();
